@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../app/theme.dart';
 import '../../../../common/widgets/gold_button.dart';
+import '../../data/auth_api.dart';
 import 'otp_screen.dart';
 
-class LoginScreen extends StatefulWidget {
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _phoneController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
@@ -23,20 +25,40 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _onRequestOtp() {
+  Future<void> _onRequestOtp() async {
     if (!_formKey.currentState!.validate()) return;
-
     setState(() => _isLoading = true);
 
-    // Simulate OTP request
-    Future.delayed(const Duration(seconds: 1), () {
-      if (!mounted) return;
-      setState(() => _isLoading = false);
+    final phone = _phoneController.text.trim();
+    final res = await ref.read(authApiProvider).requestOtp(phone: phone, purpose: 'LOGIN');
 
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => OtpScreen(phoneNumber: _phoneController.text.trim(), isRegistration: false)),
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (!res.isSuccess) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res.error ?? 'ไม่สามารถส่ง OTP ได้')));
+      return;
+    }
+
+    final data = res.data!;
+    if (data.otpDebug != null) {
+      // DEV: show OTP in SnackBar for quick testing when SMS_MOCK=true
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: PointsMeTheme.primaryGold,
+          content: Text(
+            'DEV OTP: ${data.otpDebug}  (ref: ${data.refNo})',
+            style: const TextStyle(color: PointsMeTheme.darkBg, fontWeight: FontWeight.w700),
+          ),
+        ),
       );
-    });
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => OtpScreen(phoneNumber: phone, isRegistration: false, refNo: data.refNo),
+      ),
+    );
   }
 
   @override

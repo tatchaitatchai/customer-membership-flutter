@@ -1,21 +1,33 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../app/theme.dart';
 import '../../../../common/widgets/gold_button.dart';
 import '../../../../common/widgets/premium_card.dart';
+import '../../data/auth_api.dart';
 
-class RegisterNameScreen extends StatefulWidget {
-  const RegisterNameScreen({super.key});
+class RegisterNameScreen extends ConsumerStatefulWidget {
+  final String registrationToken;
+  final String phone;
+
+  const RegisterNameScreen({super.key, this.registrationToken = '', this.phone = ''});
 
   @override
-  State<RegisterNameScreen> createState() => _RegisterNameScreenState();
+  ConsumerState<RegisterNameScreen> createState() => _RegisterNameScreenState();
 }
 
-class _RegisterNameScreenState extends State<RegisterNameScreen> with SingleTickerProviderStateMixin {
+class _RegisterNameScreenState extends ConsumerState<RegisterNameScreen> with SingleTickerProviderStateMixin {
   final _nameController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
   bool _showWelcome = false;
+
+  // Step: 0 = name input, 1 = store picker
+  int _step = 0;
+  List<StoreDto> _stores = const [];
+  int? _selectedStoreId;
+  bool _storesLoading = false;
+  String? _storesError;
 
   @override
   void dispose() {
@@ -23,20 +35,69 @@ class _RegisterNameScreenState extends State<RegisterNameScreen> with SingleTick
     super.dispose();
   }
 
-  void _onSubmit() {
+  Future<void> _onNameNext() async {
     if (!_formKey.currentState!.validate()) return;
-
+    if (widget.registrationToken.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ข้อมูลสมัครหมดอายุ กรุณาเริ่มใหม่')));
+      return;
+    }
     setState(() {
-      _isLoading = true;
+      _step = 1;
+      _storesLoading = true;
+      _storesError = null;
     });
+    final res = await ref.read(authApiProvider).listStores();
+    if (!mounted) return;
+    setState(() {
+      _storesLoading = false;
+      if (res.isSuccess) {
+        _stores = res.data ?? const [];
+      } else {
+        _storesError = res.error ?? 'โหลดรายชื่อร้านไม่สำเร็จ';
+      }
+    });
+  }
 
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _showWelcome = true;
-      });
-    });
+  Future<void> _onSubmit() async {
+    if (_selectedStoreId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('กรุณาเลือกร้าน')));
+      return;
+    }
+    setState(() => _isLoading = true);
+    final res = await ref
+        .read(authApiProvider)
+        .register(
+          registrationToken: widget.registrationToken,
+          fullName: _nameController.text.trim(),
+          storeId: _selectedStoreId!,
+        );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (!res.isSuccess) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res.error ?? 'สมัครสมาชิกไม่สำเร็จ')));
+      return;
+    }
+
+    final data = res.data!;
+    if (data.sessionToken != null) {
+      await ref.read(authApiProvider).saveSession(data.sessionToken!);
+    }
+    if (!mounted) return;
+
+    if (data.status == 'NEEDS_MIGRATION_DECISION') {
+      // Backend found legacy unlinked customers at this store with the same
+      // phone last4 — defer to user decision.
+      context.go(
+        '/migration-decision',
+        extra: {'store_id': data.storeId ?? _selectedStoreId, 'candidates': data.candidates},
+      );
+      return;
+    }
+
+    if (data.status == 'CREATED') {
+      setState(() => _showWelcome = true);
+    }
   }
 
   void _onContinue() {
@@ -48,7 +109,106 @@ class _RegisterNameScreenState extends State<RegisterNameScreen> with SingleTick
     if (_showWelcome) {
       return _buildWelcomeScreen();
     }
+    if (_step == 1) {
+      return _buildStorePickerScreen();
+    }
     return _buildNameInputScreen();
+  }
+
+  Widget _buildStorePickerScreen() {
+    return Scaffold(
+      backgroundColor: PointsMeTheme.darkBg,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: PointsMeTheme.textPrimary),
+          onPressed: _isLoading ? null : () => setState(() => _step = 0),
+        ),
+      ),
+      body: Container(
+        decoration: const BoxDecoration(gradient: PointsMeTheme.darkGradient),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 8),
+                const Text(
+                  'เลือกร้านที่สมัคร',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: PointsMeTheme.textPrimary),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'คุณจะเป็นสมาชิกของร้านที่เลือก ข้อมูลแต้มและสิทธิพิเศษจะอยู่ภายในร้านนั้น',
+                  style: TextStyle(fontSize: 13, color: PointsMeTheme.textSecondary, height: 1.5),
+                ),
+                const SizedBox(height: 20),
+                Expanded(
+                  child: _storesLoading
+                      ? const Center(child: CircularProgressIndicator(color: PointsMeTheme.primaryGold))
+                      : _storesError != null
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(_storesError!, style: const TextStyle(color: PointsMeTheme.textSecondary)),
+                              const SizedBox(height: 16),
+                              TextButton(onPressed: _onNameNext, child: const Text('ลองใหม่')),
+                            ],
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: _stores.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 10),
+                          itemBuilder: (_, i) {
+                            final s = _stores[i];
+                            final selected = s.id == _selectedStoreId;
+                            return PremiumCard(
+                              padding: EdgeInsets.zero,
+                              child: InkWell(
+                                onTap: _isLoading ? null : () => setState(() => _selectedStoreId = s.id),
+                                borderRadius: BorderRadius.circular(12),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                                        color: selected ? PointsMeTheme.primaryGold : PointsMeTheme.textSecondary,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          s.storeName,
+                                          style: const TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w600,
+                                            color: PointsMeTheme.textPrimary,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+                const SizedBox(height: 16),
+                GoldButton(
+                  text: 'สมัครสมาชิก',
+                  onPressed: _selectedStoreId == null ? null : _onSubmit,
+                  isLoading: _isLoading,
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildNameInputScreen() {
@@ -110,7 +270,7 @@ class _RegisterNameScreenState extends State<RegisterNameScreen> with SingleTick
 
                     const SizedBox(height: 32),
 
-                    GoldButton(text: 'ยืนยัน', onPressed: _onSubmit, isLoading: _isLoading),
+                    GoldButton(text: 'ถัดไป', onPressed: _onNameNext, isLoading: _isLoading),
                   ],
                 ),
               ),

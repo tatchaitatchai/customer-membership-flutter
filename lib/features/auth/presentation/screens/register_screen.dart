@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../app/theme.dart';
 import '../../../../common/widgets/gold_button.dart';
+import '../../data/auth_api.dart';
 import 'otp_screen.dart';
 
-class RegisterScreen extends StatefulWidget {
+class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
 
   @override
-  State<RegisterScreen> createState() => _RegisterScreenState();
+  ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _RegisterScreenState extends State<RegisterScreen> {
+class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _phoneController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
@@ -24,7 +26,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  void _onRegister() {
+  Future<void> _onRegister() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_acceptedTerms) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('กรุณายอมรับเงื่อนไขการใช้งาน')));
@@ -32,15 +34,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
 
     setState(() => _isLoading = true);
+    final phone = _phoneController.text.trim();
+    final res = await ref.read(authApiProvider).requestOtp(phone: phone, purpose: 'REGISTER');
 
-    Future.delayed(const Duration(seconds: 1), () {
-      if (!mounted) return;
-      setState(() => _isLoading = false);
+    if (!mounted) return;
+    setState(() => _isLoading = false);
 
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => OtpScreen(phoneNumber: _phoneController.text.trim(), isRegistration: true)),
+    if (!res.isSuccess) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res.error ?? 'ไม่สามารถส่ง OTP ได้')));
+      return;
+    }
+
+    final data = res.data!;
+    if (data.otpDebug != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: PointsMeTheme.primaryGold,
+          content: Text(
+            'DEV OTP: ${data.otpDebug}  (ref: ${data.refNo})',
+            style: const TextStyle(color: PointsMeTheme.darkBg, fontWeight: FontWeight.w700),
+          ),
+        ),
       );
-    });
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => OtpScreen(phoneNumber: phone, isRegistration: true, refNo: data.refNo),
+      ),
+    );
   }
 
   @override

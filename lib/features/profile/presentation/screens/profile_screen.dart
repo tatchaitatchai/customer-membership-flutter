@@ -124,6 +124,17 @@ class ProfileScreen extends StatelessWidget {
                     const Divider(color: PointsMeTheme.dividerColor, height: 1, indent: 56),
                     _buildMenuItem(
                       context,
+                      icon: Icons.link,
+                      iconColor: PointsMeTheme.primaryGold,
+                      title: 'เชื่อมบัญชีสมาชิกเดิม',
+                      subtitle: 'ย้ายแต้มและประวัติจากระบบเก่า',
+                      onTap: () {
+                        context.push('/link-legacy');
+                      },
+                    ),
+                    const Divider(color: PointsMeTheme.dividerColor, height: 1, indent: 56),
+                    _buildMenuItem(
+                      context,
                       icon: Icons.shield_outlined,
                       iconColor: PointsMeTheme.textSecondary,
                       title: 'นโยบายความเป็นส่วนตัว',

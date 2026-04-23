@@ -1,21 +1,24 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../app/theme.dart';
 import '../../../../common/widgets/gold_button.dart';
+import '../../data/auth_api.dart';
 
-class OtpScreen extends StatefulWidget {
+class OtpScreen extends ConsumerStatefulWidget {
   final String phoneNumber;
   final bool isRegistration;
+  final String refNo;
 
-  const OtpScreen({super.key, required this.phoneNumber, this.isRegistration = false});
+  const OtpScreen({super.key, required this.phoneNumber, this.isRegistration = false, this.refNo = ''});
 
   @override
-  State<OtpScreen> createState() => _OtpScreenState();
+  ConsumerState<OtpScreen> createState() => _OtpScreenState();
 }
 
-class _OtpScreenState extends State<OtpScreen> {
+class _OtpScreenState extends ConsumerState<OtpScreen> {
   final List<TextEditingController> _controllers = List.generate(6, (_) => TextEditingController());
   final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
   bool _isLoading = false;
@@ -67,20 +70,71 @@ class _OtpScreenState extends State<OtpScreen> {
     }
   }
 
-  void _verifyOtp(String otp) {
+  String get _purpose => widget.isRegistration ? 'REGISTER' : 'LOGIN';
+
+  Future<void> _verifyOtp(String otp) async {
     setState(() => _isLoading = true);
+    final api = ref.read(authApiProvider);
+    final res = await api.verifyOtp(phone: widget.phoneNumber, otp: otp, purpose: _purpose);
 
-    // Simulate OTP verification
-    Future.delayed(const Duration(seconds: 1), () {
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (!res.isSuccess) {
+      _clearOtp();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res.error ?? 'รหัส OTP ไม่ถูกต้อง')));
+      return;
+    }
+
+    final data = res.data!;
+    if (data.status == 'LOGGED_IN' && data.sessionToken != null) {
+      await api.saveSession(data.sessionToken!);
       if (!mounted) return;
-      setState(() => _isLoading = false);
+      context.go('/home');
+      return;
+    }
 
-      if (widget.isRegistration) {
-        context.go('/register-name');
-      } else {
-        context.go('/home');
-      }
-    });
+    if (data.status == 'NEEDS_REGISTRATION' && data.registrationToken != null) {
+      if (!mounted) return;
+      context.push(
+        '/register-name',
+        extra: {'registration_token': data.registrationToken!, 'phone': widget.phoneNumber},
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('เกิดข้อผิดพลาดไม่คาดคิด')));
+  }
+
+  void _clearOtp() {
+    for (final c in _controllers) {
+      c.clear();
+    }
+    _focusNodes.first.requestFocus();
+  }
+
+  Future<void> _resendOtp() async {
+    setState(() => _isLoading = true);
+    final res = await ref.read(authApiProvider).requestOtp(phone: widget.phoneNumber, purpose: _purpose);
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    if (!res.isSuccess) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res.error ?? 'ส่งรหัสอีกครั้งไม่สำเร็จ')));
+      return;
+    }
+    _startCountdown();
+    final data = res.data!;
+    if (data.otpDebug != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: PointsMeTheme.primaryGold,
+          content: Text(
+            'DEV OTP: ${data.otpDebug}  (ref: ${data.refNo})',
+            style: const TextStyle(color: PointsMeTheme.darkBg, fontWeight: FontWeight.w700),
+          ),
+        ),
+      );
+    }
   }
 
   String get _maskedPhone {
@@ -139,6 +193,14 @@ class _OtpScreenState extends State<OtpScreen> {
                   'รหัส OTP ถูกส่งไปที่ $_maskedPhone',
                   style: const TextStyle(fontSize: 14, color: PointsMeTheme.textSecondary),
                 ),
+
+                if (widget.refNo.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Ref: ${widget.refNo}',
+                    style: const TextStyle(fontSize: 12, color: PointsMeTheme.textMuted, letterSpacing: 1),
+                  ),
+                ],
 
                 const SizedBox(height: 40),
 
@@ -206,10 +268,7 @@ class _OtpScreenState extends State<OtpScreen> {
                         style: const TextStyle(color: PointsMeTheme.textMuted, fontSize: 14),
                       )
                     : GestureDetector(
-                        onTap: () {
-                          _startCountdown();
-                          // Resend OTP logic
-                        },
+                        onTap: _resendOtp,
                         child: const Text(
                           'ส่งรหัส OTP อีกครั้ง',
                           style: TextStyle(color: PointsMeTheme.primaryGold, fontWeight: FontWeight.w600, fontSize: 14),
